@@ -6,7 +6,6 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 
 namespace Utility
 {
@@ -109,8 +108,8 @@ namespace Utility
 
             public BroadcastListener()
             {
-                Port = -1;
-                Encoding = System.Text.Encoding.UTF8;
+                _port = -1;
+                _encoding = System.Text.Encoding.UTF8;
             }
 
             public void Start()
@@ -138,14 +137,18 @@ namespace Utility
                 try
                 {
                     broadcastClient = new UdpClient();
-                    if(Port == -1)
+                    if(_port == -1)
                         _port = GetNextAvailablePortNumber();
-                    broadcastListenerGroupEP = new IPEndPoint(IPAddress.Any, Port);
+                    broadcastListenerGroupEP = new IPEndPoint(IPAddress.Any, _port);
 
                     broadcastClient.Client.Bind(broadcastListenerGroupEP);
                     while (true)
                     {
                         byte[] data = broadcastClient.Receive(ref broadcastListenerGroupEP);
+
+                        if (data == null || data.Length == 0)
+                            break;
+
                         BroadcastMessage message = new BroadcastMessage(broadcastListenerGroupEP, data);
                         new Thread(ReceivedMessage).Start(message);
                     }
@@ -153,7 +156,7 @@ namespace Utility
                 }
                 catch (ThreadAbortException)
                 {
-                    Port = 0;
+                    _port = -1;
                     broadcastClient.Close();
                     broadcastListenerGroupEP = null;
                 }
@@ -165,11 +168,7 @@ namespace Utility
 
             private void ReceivedMessage(object input)
             {
-
                 byte[] data = ((BroadcastMessage)(input)).data;
-                if (data == null || data.Length == 0)
-                    return;
-
                 string message = _encoding.GetString(data, 0, data.Length);
 
                 if(BroadcastReceived != null)
@@ -179,7 +178,6 @@ namespace Utility
                     args.message = message;
                     BroadcastReceived(this, args);
                 }
-
             }
         }
     }
