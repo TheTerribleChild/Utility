@@ -48,6 +48,27 @@ namespace Utility
                 return true;
         }
 
+        public static void BroadcastMessage(int port, string message)
+        {
+            BroadcastMessage(port, message, Encoding.UTF8);
+        }
+
+        public static void BroadcastMessage(int port, string message, Encoding encoding)
+        {
+            try
+            {
+                UdpClient client = new UdpClient();
+                IPEndPoint ip = new IPEndPoint(IPAddress.Broadcast, port);
+                byte[] bytes = encoding.GetBytes(message);
+                client.Send(bytes, bytes.Length, ip);
+                client.Close();
+            }
+            catch(Exception e)
+            {
+                Console.Error.WriteLine(e);
+            }
+        }
+
         public class BroadcastReceivedEventArgs : EventArgs
         {
             public IPEndPoint endpoint;
