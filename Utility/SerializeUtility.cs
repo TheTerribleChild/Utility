@@ -7,6 +7,7 @@ using System.Runtime.Serialization.Formatters.Binary;
 using System.Runtime.Serialization.Formatters.Soap;
 using System.Text;
 using System.Threading.Tasks;
+using Newtonsoft.Json;
 
 
 namespace Utility
@@ -89,7 +90,7 @@ namespace Utility
             try
             {
                 IFormatter formatter = new SoapFormatter();
-                FileStream stream = new FileStream("MyFile.bin", FileMode.Create, FileAccess.Write, FileShare.None);
+                FileStream stream = new FileStream(fileLocation, FileMode.Create, FileAccess.Write, FileShare.None);
                 formatter.Serialize(stream, serialObject);
                 stream.Close();
                 return true;
@@ -106,7 +107,7 @@ namespace Utility
             try
             {
                 IFormatter formatter = new SoapFormatter();
-                FileStream stream = new FileStream("MyFile.bin", FileMode.Open, FileAccess.Read, FileShare.Read);
+                FileStream stream = new FileStream(fileLocation, FileMode.Open, FileAccess.Read, FileShare.Read);
                 object deserializedObject = formatter.Deserialize(stream);
                 stream.Close();
                 return deserializedObject;
@@ -122,11 +123,12 @@ namespace Utility
         {
             try
             {
-               string serializedObject;
+                string serializedObject;
                 IFormatter formatter = new SoapFormatter();
                 MemoryStream stream = new MemoryStream();
                 formatter.Serialize(stream, serialObject);
-                serializedObject = new StreamReader(stream, Encoding.UTF8).ReadToEnd();
+                stream.Position = 0;
+                serializedObject = new StreamReader(stream).ReadToEnd();
                 stream.Close();
                 return serializedObject;
             }
@@ -151,6 +153,32 @@ namespace Utility
             {
                 Console.Error.WriteLine(e);
                 return null;
+            }
+        }
+
+        public static string SerializeToJsonString(object serialObject)
+        {
+            try
+            {
+                return JsonConvert.SerializeObject(serialObject);
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine(e);
+                return null;
+            }
+        }
+
+        public static T DeserializeJsonString<T>(string jsonString)
+        {
+            try
+            {
+                return JsonConvert.DeserializeObject<T>(jsonString);
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine(e);
+                return default(T);
             }
         }
     }
