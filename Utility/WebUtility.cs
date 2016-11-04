@@ -11,25 +11,18 @@ namespace Utility
 {
     public static class WebUtility
     {
-        public static int GetNextAvailablePortNumber()
+        public static int GetNextAvailableUDPPortNumber()
         {
-            int PortStartIndex = 1025;
-            int PortEndIndex = 65536;
-            IPGlobalProperties properties = IPGlobalProperties.GetIPGlobalProperties();
-            IPEndPoint[] tcpEndPoints = properties.GetActiveTcpListeners();
+            int startingAtPort = 1025;
+            int maxNumberOfPortsToCheck = 500;
+            var range = Enumerable.Range(startingAtPort, maxNumberOfPortsToCheck);
+            var portsInUse = from p in range
+                                join used in System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveUdpListeners()
+                                on p equals used.Port
+                                select p;
 
-            List<int> usedPorts = tcpEndPoints.Select(p => p.Port).ToList<int>();
-            int unusedPort = 0;
+            return range.Except(portsInUse).FirstOrDefault();
 
-            for (int port = PortStartIndex; port < PortEndIndex; port++)
-            {
-                if (!usedPorts.Contains(port))
-                {
-                    unusedPort = port;
-                    break;
-                }
-            }
-            return unusedPort;
         }
 
         public static bool IsPortOpen(int port)
@@ -48,12 +41,24 @@ namespace Utility
                 return true;
         }
 
-        public static void BroadcastMessage(int port, string message)
+        public static IPAddress GetLocalIPAddress()
         {
-            BroadcastMessage(port, message, Encoding.UTF8);
+            IPHostEntry iphostentry = Dns.GetHostByName(Dns.GetHostName());
+            return iphostentry.AddressList.FirstOrDefault<IPAddress>();
         }
 
-        public static void BroadcastMessage(int port, string message, Encoding encoding)
+        public static void BroadcastMessage(int port, string message)
+        {
+            IPEndPoint endpoint = new IPEndPoint(100, 0);
+            BroadcastMessage(port, message, Encoding.UTF8, ref endpoint);
+        }
+
+        public static void BroadcastMessage(int port, string message, ref IPEndPoint endPoint)
+        {
+            BroadcastMessage(port, message, Encoding.UTF8, ref endPoint);
+        }
+
+        public static void BroadcastMessage(int port, string message, Encoding encoding, ref IPEndPoint returnEndPoint)
         {
             try
             {
@@ -69,36 +74,26 @@ namespace Utility
             }
         }
 
-        public class BroadcastReceivedEventArgs : EventArgs
+        public class MessageReceivedEventArgs : EventArgs
         {
             public IPEndPoint endpoint;
             public string message;
         }
 
-        public delegate void BroadcastReceivedEventHandler(Object sender, BroadcastReceivedEventArgs e);
+        public delegate void MessageReceivedEventHandler(Object sender, MessageReceivedEventArgs e);
 
-        public class BroadcastListener
+        public class UdpConnector
         {
-            private UdpClient broadcastClient;
-            private IPEndPoint broadcastListenerGroupEP;
-            private Thread broadcastListenThread;
+            
+            private Thread receiverThread;
 
-            public BroadcastReceivedEventHandler BroadcastReceived;
+            public IPEndPoint ReceiverEP { get; private set; }
+            public IPEndPoint SenderEP { get; private set; }
 
-            private int _port;
-            public int Port
-            {
-                get
-                {
-                    return _port;
-                }
-                set
-                {
-                    if (broadcastListenThread != null && broadcastListenThread.ThreadState == ThreadState.Running)
-                        return;
-                    this._port = value;
-                }
-            }
+            private UdpClient receiverClient;
+            private UdpClient senderClient;
+
+            public MessageReceivedEventHandler MessageReceived;
 
             private Encoding _encoding;
             public Encoding Encoding
@@ -109,77 +104,140 @@ namespace Utility
                 }
                 set
                 {
-                    if (broadcastListenThread != null && broadcastListenThread.ThreadState == ThreadState.Running)
+                    if (receiverThread != null && receiverThread.ThreadState == ThreadState.Running)
                         return;
                     this._encoding = value;
                 }
             }
 
-            private class BroadcastMessage
+            private bool _listen;
+            public bool Listen
+            {
+                get
+                {
+                    return this._listen;
+                }
+                set
+                {
+                    if (_listen != value && value == true)
+                        StartReceiving();
+                    else if (_listen != value && value == false)
+                        StopReceiving();
+
+                    this._listen = value;
+                }
+            }
+
+            private class IncomingMessage
             {
                 public IPEndPoint endpoint;
                 public Byte[] data;
 
-                public BroadcastMessage(IPEndPoint endpoint, Byte[] data)
+                public IncomingMessage(IPEndPoint endpoint, Byte[] data)
                 {
                     this.endpoint = new IPEndPoint(endpoint.Address, endpoint.Port);
                     this.data = data;
                 }
             }
 
-            public BroadcastListener()
+            public UdpConnector()
             {
-                _port = -1;
                 _encoding = System.Text.Encoding.UTF8;
+                _listen = false;
+
+                receiverClient = null;
+                senderClient = null;
+
+                ReceiverEP = null;
+                SenderEP = null;
+
             }
 
-            public void Start()
+            private void InitializeSender()
             {
-                if (broadcastListenThread != null && broadcastListenThread.ThreadState == ThreadState.Running)
+                if(senderClient == null)
                 {
-                    Stop();
-                }
-                broadcastListenThread = new Thread(ListenToBroadcast);
-                broadcastListenThread.Start();
-            }
-
-            public void Stop()
-            {
-                if (broadcastListenThread.ThreadState == ThreadState.Running)
-                {
-                    broadcastListenThread.Abort();
-                    broadcastClient.Close();
-                    broadcastListenThread.Join();
+                    SenderEP = new IPEndPoint(IPAddress.Any, GetNextAvailableUDPPortNumber());
+                    senderClient = new UdpClient();
+                    senderClient.Client.Bind(SenderEP);
                 }
             }
 
-            private void ListenToBroadcast()
+            private void InitializeReceiver()
+            {
+                if(receiverClient == null)
+                {
+                    ReceiverEP = new IPEndPoint(IPAddress.Any, GetNextAvailableUDPPortNumber());
+                    receiverClient = new UdpClient();
+                    receiverClient.Client.Bind(ReceiverEP);
+                }
+            }
+
+            private void CloseSender()
+            {
+                if (senderClient != null)
+                    senderClient.Close();
+
+                senderClient = null;
+                SenderEP = null;
+            }
+
+            private void CloseReceiver()
+            {
+                if (receiverClient != null)
+                    receiverClient.Close();
+
+                receiverClient = null;
+                ReceiverEP = null;
+            }
+
+            public void Close()
+            {
+                StopReceiving();
+            }
+
+            private void StartReceiving()
+            {
+                if (receiverThread != null && receiverThread.ThreadState == ThreadState.Running)
+                {
+                    StopReceiving();
+                }
+                InitializeReceiver();
+                receiverThread = new Thread(ReceiveMessage);
+                receiverThread.Start();
+            }
+
+            private void StopReceiving()
+            {
+                if (receiverThread.ThreadState == ThreadState.Running)
+                {
+                    receiverThread.Abort();
+                    CloseReceiver();
+                    receiverThread.Join();
+                }
+            }
+
+            private void ReceiveMessage()
             {
                 try
                 {
-                    broadcastClient = new UdpClient();
-                    if(_port == -1)
-                        _port = GetNextAvailablePortNumber();
-                    broadcastListenerGroupEP = new IPEndPoint(IPAddress.Any, _port);
+                    IPEndPoint remoteEP = new IPEndPoint(IPAddress.Any, 0);
 
-                    broadcastClient.Client.Bind(broadcastListenerGroupEP);
                     while (true)
                     {
-                        byte[] data = broadcastClient.Receive(ref broadcastListenerGroupEP);
+                        byte[] data = receiverClient.Receive(ref remoteEP);
 
                         if (data == null || data.Length == 0)
                             break;
 
-                        BroadcastMessage message = new BroadcastMessage(broadcastListenerGroupEP, data);
+                        IncomingMessage message = new IncomingMessage(remoteEP, data);
                         new Thread(ReceivedMessage).Start(message);
                     }
 
                 }
                 catch (ThreadAbortException)
                 {
-                    _port = -1;
-                    broadcastClient.Close();
-                    broadcastListenerGroupEP = null;
+                    Console.WriteLine("Listener closed");
                 }
                 catch (Exception e)
                 {
@@ -189,15 +247,15 @@ namespace Utility
 
             private void ReceivedMessage(object input)
             {
-                byte[] data = ((BroadcastMessage)(input)).data;
+                byte[] data = ((IncomingMessage)(input)).data;
                 string message = _encoding.GetString(data, 0, data.Length);
 
-                if(BroadcastReceived != null)
+                if(MessageReceived != null)
                 {
-                    BroadcastReceivedEventArgs args = new BroadcastReceivedEventArgs();
-                    args.endpoint = ((BroadcastMessage)(input)).endpoint;
+                    MessageReceivedEventArgs args = new MessageReceivedEventArgs();
+                    args.endpoint = ((IncomingMessage)(input)).endpoint;
                     args.message = message;
-                    BroadcastReceived(this, args);
+                    MessageReceived(this, args);
                 }
             }
         }
