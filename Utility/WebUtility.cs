@@ -43,8 +43,28 @@ namespace Utility
 
         public static IPAddress GetLocalIPAddress()
         {
+
+            byte[] randomKey = Encoding.UTF8.GetBytes(new Random().Next().ToString());
+            int port = GetNextAvailableUDPPortNumber();
+            UdpClient client = new UdpClient(new IPEndPoint(IPAddress.Any, port));
+            client.Send(randomKey, randomKey.Length, new IPEndPoint(IPAddress.Broadcast, port));
             IPHostEntry iphostentry = Dns.GetHostByName(Dns.GetHostName());
-            return iphostentry.AddressList.FirstOrDefault<IPAddress>();
+            IPEndPoint incomeEP = null;
+
+            while(true)
+            {
+                byte[] incomingKey = client.Receive(ref incomeEP);
+                if (incomeEP.Port == port && iphostentry.AddressList.Contains(incomeEP.Address))
+                {
+                    //Console.WriteLine(incomeEP.Address + " " + randomKey + " " + incomingKey);
+                    break;
+                }
+                    
+            }
+
+            
+
+            return incomeEP.Address;
         }
 
         public static void BroadcastMessage(int port, string message)
@@ -76,22 +96,40 @@ namespace Utility
 
         public class MessageReceivedEventArgs : EventArgs
         {
-            public IPEndPoint endpoint;
-            public string message;
+            public IPEndPoint RemoteEndpoint { get; private set; }
+            public IPEndPoint LocalEndpoint { get; private set; }
+            public string Message { get; private set; }
+
+            public MessageReceivedEventArgs(IPEndPoint remoteEndpoint, IPEndPoint localEndpoint, string message)
+            {
+                this.RemoteEndpoint = remoteEndpoint;
+                this.LocalEndpoint = localEndpoint;
+                this.Message = message;
+            }
         }
 
         public delegate void MessageReceivedEventHandler(Object sender, MessageReceivedEventArgs e);
 
+        internal class IncomingMessage
+        {
+            public IPEndPoint endpoint;
+            public Byte[] data;
+
+            public IncomingMessage(IPEndPoint endpoint, Byte[] data)
+            {
+                this.endpoint = new IPEndPoint(endpoint.Address, endpoint.Port);
+                this.data = data;
+            }
+        }
+
         public class UdpConnector
         {
-            
+
             private Thread receiverThread;
 
-            public IPEndPoint ReceiverEP { get; private set; }
-            public IPEndPoint SenderEP { get; private set; }
+            public IPEndPoint UdpEP { get; private set; }
 
-            private UdpClient receiverClient;
-            private UdpClient senderClient;
+            private UdpClient udpClient;
 
             public MessageReceivedEventHandler MessageReceived;
 
@@ -128,72 +166,54 @@ namespace Utility
                 }
             }
 
-            private class IncomingMessage
-            {
-                public IPEndPoint endpoint;
-                public Byte[] data;
-
-                public IncomingMessage(IPEndPoint endpoint, Byte[] data)
-                {
-                    this.endpoint = new IPEndPoint(endpoint.Address, endpoint.Port);
-                    this.data = data;
-                }
-            }
-
-            public UdpConnector()
+            public UdpConnector(IPEndPoint endpoint = null)
             {
                 _encoding = System.Text.Encoding.UTF8;
                 _listen = false;
 
-                receiverClient = null;
-                senderClient = null;
-
-                ReceiverEP = null;
-                SenderEP = null;
+                udpClient = null;
+                UdpEP = endpoint;
 
             }
 
-            private void InitializeSender()
+            public void SendMessage(string message, IPEndPoint destination)
             {
-                if(senderClient == null)
+                if (udpClient == null)
+                    Initialize();
+
+                byte[] encodedMessage = _encoding.GetBytes(message);
+                udpClient.Send(encodedMessage, encodedMessage.Length, destination);
+
+            }
+
+            private void Initialize()
+            {
+                if (udpClient == null)
                 {
-                    SenderEP = new IPEndPoint(IPAddress.Any, GetNextAvailableUDPPortNumber());
-                    senderClient = new UdpClient();
-                    senderClient.Client.Bind(SenderEP);
+                    if(UdpEP == null)
+                        UdpEP = new IPEndPoint(IPAddress.Any, GetNextAvailableUDPPortNumber());
+                    udpClient = new UdpClient();
+                    udpClient.Client.Bind(UdpEP);
                 }
             }
 
-            private void InitializeReceiver()
-            {
-                if(receiverClient == null)
-                {
-                    ReceiverEP = new IPEndPoint(IPAddress.Any, GetNextAvailableUDPPortNumber());
-                    receiverClient = new UdpClient();
-                    receiverClient.Client.Bind(ReceiverEP);
-                }
-            }
-
-            private void CloseSender()
-            {
-                if (senderClient != null)
-                    senderClient.Close();
-
-                senderClient = null;
-                SenderEP = null;
-            }
 
             private void CloseReceiver()
             {
-                if (receiverClient != null)
-                    receiverClient.Close();
+                if (udpClient != null)
+                    udpClient.Close();
 
-                receiverClient = null;
-                ReceiverEP = null;
+                udpClient = null;
+                UdpEP = null;
             }
 
             public void Close()
             {
-                StopReceiving();
+                if (receiverThread.ThreadState == ThreadState.Running)
+                    StopReceiving();
+                else
+                    CloseReceiver();
+                
             }
 
             private void StartReceiving()
@@ -202,19 +222,16 @@ namespace Utility
                 {
                     StopReceiving();
                 }
-                InitializeReceiver();
+                Initialize();
                 receiverThread = new Thread(ReceiveMessage);
                 receiverThread.Start();
             }
 
             private void StopReceiving()
             {
-                if (receiverThread.ThreadState == ThreadState.Running)
-                {
-                    receiverThread.Abort();
-                    CloseReceiver();
-                    receiverThread.Join();
-                }
+                receiverThread.Abort();
+                CloseReceiver();
+                receiverThread.Join();
             }
 
             private void ReceiveMessage()
@@ -225,8 +242,8 @@ namespace Utility
 
                     while (true)
                     {
-                        byte[] data = receiverClient.Receive(ref remoteEP);
-
+                        byte[] data = udpClient.Receive(ref remoteEP);
+                        Console.WriteLine(udpClient.Client.LocalEndPoint);
                         if (data == null || data.Length == 0)
                             break;
 
@@ -249,12 +266,10 @@ namespace Utility
             {
                 byte[] data = ((IncomingMessage)(input)).data;
                 string message = _encoding.GetString(data, 0, data.Length);
-
-                if(MessageReceived != null)
+                Console.WriteLine("Thread ID" + Thread.CurrentThread.ManagedThreadId);
+                if (MessageReceived != null)
                 {
-                    MessageReceivedEventArgs args = new MessageReceivedEventArgs();
-                    args.endpoint = ((IncomingMessage)(input)).endpoint;
-                    args.message = message;
+                    MessageReceivedEventArgs args = new MessageReceivedEventArgs(((IncomingMessage)(input)).endpoint, UdpEP, message);
                     MessageReceived(this, args);
                 }
             }
