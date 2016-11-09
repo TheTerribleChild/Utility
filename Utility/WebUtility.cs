@@ -182,8 +182,11 @@ namespace Utility
                     Initialize();
 
                 byte[] encodedMessage = _encoding.GetBytes(message);
-                udpClient.Send(encodedMessage, encodedMessage.Length, destination);
 
+                lock(udpClient)
+                {
+                    udpClient.Send(encodedMessage, encodedMessage.Length, destination);
+                }
             }
 
             private void Initialize()
