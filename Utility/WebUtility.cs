@@ -173,7 +173,7 @@ namespace Utility
 
                 udpClient = null;
                 UdpEP = endpoint;
-
+                Initialize();
             }
 
             public void SendMessage(string message, IPEndPoint destination)
@@ -246,7 +246,6 @@ namespace Utility
                     while (true)
                     {
                         byte[] data = udpClient.Receive(ref remoteEP);
-                        Console.WriteLine(udpClient.Client.LocalEndPoint);
                         if (data == null || data.Length == 0)
                             break;
 
@@ -269,7 +268,6 @@ namespace Utility
             {
                 byte[] data = ((IncomingMessage)(input)).data;
                 string message = _encoding.GetString(data, 0, data.Length);
-                Console.WriteLine("Thread ID" + Thread.CurrentThread.ManagedThreadId);
                 if (MessageReceived != null)
                 {
                     MessageReceivedEventArgs args = new MessageReceivedEventArgs(((IncomingMessage)(input)).endpoint, UdpEP, message);

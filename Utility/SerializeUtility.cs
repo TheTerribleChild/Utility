@@ -8,12 +8,21 @@ using System.Runtime.Serialization.Formatters.Soap;
 using System.Text;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
-
+using System.Net;
+using Newtonsoft.Json.Linq;
 
 namespace Utility
 {
     public static class SerializeUtility
     {
+        private static JsonSerializerSettings jsonSetting;
+
+        static SerializeUtility()
+        {
+            jsonSetting = new JsonSerializerSettings();
+            jsonSetting.Converters.Add(new IPEndPointConverter());
+            jsonSetting.Converters.Add(new IPAddressConverter());
+        }
 
         public static bool SerializeToFileBinary(object serialObject, string fileLocation)
         {
@@ -160,7 +169,7 @@ namespace Utility
         {
             try
             {
-                return JsonConvert.SerializeObject(serialObject);
+                return JsonConvert.SerializeObject(serialObject, jsonSetting);
             }
             catch (Exception e)
             {
@@ -173,13 +182,60 @@ namespace Utility
         {
             try
             {
-                return JsonConvert.DeserializeObject<T>(jsonString);
+                return JsonConvert.DeserializeObject<T>(jsonString, jsonSetting);
             }
             catch (Exception e)
             {
                 Console.Error.WriteLine(e);
                 return default(T);
             }
+        }
+    }
+
+    internal class IPEndPointConverter : JsonConverter
+    {
+        public override bool CanConvert(Type objectType)
+        {
+            return (objectType == typeof(IPEndPoint));
+        }
+
+        public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
+        {
+            IPEndPoint ep = (IPEndPoint)value;
+            writer.WriteStartObject();
+            writer.WritePropertyName("Address");
+            serializer.Serialize(writer, ep.Address);
+            writer.WritePropertyName("Port");
+            writer.WriteValue(ep.Port);
+            writer.WriteEndObject();
+        }
+
+        public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
+        {
+            JObject jo = JObject.Load(reader);
+            IPAddress address = jo["Address"].ToObject<IPAddress>(serializer);
+            int port = jo["Port"].Value<int>();
+            return new IPEndPoint(address, port);
+        }
+    }
+
+    internal class IPAddressConverter : JsonConverter
+    {
+        public override bool CanConvert(Type objectType)
+        {
+            return (objectType == typeof(IPAddress));
+        }
+
+        public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
+        {
+            IPAddress ip = (IPAddress)value;
+            writer.WriteValue(ip.ToString());
+        }
+
+        public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
+        {
+            JToken token = JToken.Load(reader);
+            return IPAddress.Parse(token.Value<string>());
         }
     }
 }
