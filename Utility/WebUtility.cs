@@ -148,28 +148,28 @@ namespace Utility
                 }
             }
 
-            private bool _listen;
-            public bool Listen
+            private bool _passiveListen;
+            public bool PassiveListen
             {
                 get
                 {
-                    return this._listen;
+                    return this._passiveListen;
                 }
                 set
                 {
-                    if (_listen != value && value == true)
+                    if (_passiveListen != value && value == true)
                         StartReceiving();
-                    else if (_listen != value && value == false)
+                    else if (_passiveListen != value && value == false)
                         StopReceiving();
 
-                    this._listen = value;
+                    this._passiveListen = value;
                 }
             }
 
             public UdpConnector(IPEndPoint endpoint = null)
             {
                 _encoding = System.Text.Encoding.UTF8;
-                _listen = false;
+                _passiveListen = false;
 
                 udpClient = null;
                 UdpEP = endpoint;
@@ -187,6 +187,33 @@ namespace Utility
                 {
                     udpClient.Send(encodedMessage, encodedMessage.Length, destination);
                 }
+            }
+
+            public string GetMessage(out IPEndPoint remoteEP, int receiveTimeout = 10000)
+            {
+                bool wasPassiveOn = PassiveListen;
+                int previousTimeout = udpClient.Client.ReceiveTimeout;
+                byte[] data = null;
+                bool response = false;
+
+                remoteEP = new IPEndPoint(IPAddress.Any, 0);
+
+                PassiveListen = false;
+                try
+                {
+                    udpClient.Client.ReceiveTimeout = receiveTimeout;
+                    data = udpClient.Receive(ref remoteEP);
+                    response = true;
+                }
+                catch (Exception) { }
+                
+
+                PassiveListen = wasPassiveOn;
+                udpClient.Client.ReceiveTimeout = previousTimeout;
+
+                if(response)
+                    return _encoding.GetString(data);
+                return null;
             }
 
             private void Initialize()
